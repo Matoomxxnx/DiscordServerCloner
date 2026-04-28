@@ -153,9 +153,8 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 # Slash commands
 # ─────────────────────────────────────────────
 
-@bot.tree.command(name="setup_verify", description="ตั้งค่าระบบยืนยันตัวตน (Admin เท่านั้น)")
+@bot.tree.command(name="setup_verify", description="ตั้งค่าระบบยืนยันตัวตน — รันคำสั่งนี้ในช่องที่ต้องการวางปุ่มยืนยัน (Admin เท่านั้น)")
 @app_commands.describe(
-    channel="ช่องที่จะส่งข้อความยืนยัน",
     role="Role ที่จะมอบให้เมื่อยืนยันสำเร็จ",
     title="หัวข้อ embed (default: ชื่อ server)",
     message="ข้อความใน embed",
@@ -165,7 +164,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 @app_commands.default_permissions(administrator=True)
 async def setup_verify(
     interaction: discord.Interaction,
-    channel: discord.abc.GuildChannel,
     role: discord.Role,
     title: str = None,
     message: str = "! กรุณายืนยันตัวตนเพื่อเข้าใช้งานเซิร์ฟเวอร์",
@@ -174,12 +172,7 @@ async def setup_verify(
 ):
     await interaction.response.defer(ephemeral=True)
 
-    if not isinstance(channel, discord.abc.Messageable):
-        await interaction.followup.send(
-            "❌ กรุณาเลือกช่องข้อความ (Text Channel) เท่านั้น ไม่สามารถใช้ Forum หรือ Category ได้",
-            ephemeral=True
-        )
-        return
+    channel_id = interaction.channel_id
 
     # ตรวจสอบ hex color
     try:
@@ -191,7 +184,7 @@ async def setup_verify(
     cfg = load_config()
     cfg[str(interaction.guild_id)] = {
         "role_id": str(role.id),
-        "channel_id": str(channel.id),
+        "channel_id": str(channel_id),
     }
     save_config(cfg)
 
@@ -213,6 +206,7 @@ async def setup_verify(
 
     view = VerifyView()
     try:
+        channel = interaction.channel or await interaction.guild.fetch_channel(channel_id)
         await channel.send(embed=embed, view=view)
     except discord.Forbidden:
         await interaction.followup.send(
@@ -226,7 +220,7 @@ async def setup_verify(
 
     await interaction.followup.send(
         f"✅ ตั้งค่าสำเร็จ!\n"
-        f"📌 ช่อง: {channel.mention}\n"
+        f"📌 ช่อง: <#{channel_id}>\n"
         f"🎖️ Role: **{role.name}**",
         ephemeral=True
     )
