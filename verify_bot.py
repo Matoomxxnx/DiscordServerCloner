@@ -75,6 +75,8 @@ class VerifyView(discord.ui.View):
             return
 
         member = interaction.user
+        if not isinstance(member, discord.Member):
+            member = await interaction.guild.fetch_member(interaction.user.id)
 
         if role in member.roles:
             await interaction.followup.send(
@@ -106,7 +108,6 @@ class VerifyView(discord.ui.View):
 class VerifyBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
-        intents.members = True
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
