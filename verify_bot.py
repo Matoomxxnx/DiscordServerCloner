@@ -280,15 +280,17 @@ class VerifyBot(commands.Bot):
         for view in [VerifyView(), TicketOpenView(), TicketCloseView(), GiveawayView(), ShopBuyView()]:
             self.add_view(view)
         self.check_giveaways.start()
-        try:
-            await self.tree.sync()
-            print("[BOT] Slash commands synced.")
-        except Exception as e:
-            print(f"[BOT] Sync failed: {e}")
 
     async def on_ready(self):
         await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Daslo Store 🚀"))
         print(f"[BOT] ✅ Online: {self.user} | Servers: {len(self.guilds)}")
+        # Guild sync ขึ้นทันที ไม่ต้องรอ 1 ชั่วโมงแบบ global sync
+        for guild in self.guilds:
+            try:
+                await self.tree.sync(guild=guild)
+                print(f"[BOT] Synced to {guild.name}")
+            except Exception as e:
+                print(f"[BOT] Sync failed {guild.name}: {e}")
 
     async def on_member_join(self, member: discord.Member):
         gcfg = guild_cfg(member.guild.id)
