@@ -1,24 +1,20 @@
 """
-Discord Verification Role Bot
-ตั้งค่าด้วย /setup_verify แล้วสมาชิกกดปุ่มยืนยันตัวตนเพื่อรับ Role
+Bunmee Store Discord Bot
+Features: Verify, Welcome, Ticket, Giveaway, Shop, Credit
 """
 
 import discord
 from discord import app_commands
-from discord.ext import commands
-import json
-import os
-import sys
+from discord.ext import commands, tasks
+import json, os, sys, asyncio, random
+from datetime import datetime, timedelta, timezone
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "verify_config.json")
 
 
-# ─────────────────────────────────────────────
-# Config helpers
-# ─────────────────────────────────────────────
+# ─── Config ───────────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
-    # GitHub Actions: อ่านจาก env var VERIFY_CONFIG (JSON string)
     config = {}
     env_cfg = os.getenv("VERIFY_CONFIG")
     if env_cfg:
@@ -37,104 +33,338 @@ def save_config(config: dict):
         json.dump(config, f, indent=2, ensure_ascii=False)
 
 
-# ─────────────────────────────────────────────
-# Persistent verify button view
-# ─────────────────────────────────────────────
+def guild_cfg(guild_id) -> dict:
+    return load_config().get(str(guild_id), {})
+
+
+def update_guild(guild_id, **kwargs):
+    cfg = load_config()
+    cfg.setdefault(str(guild_id), {}).update(kwargs)
+    save_config(cfg)
+
+
+# ─── Verify View ──────────────────────────────────────────────────────────────
 
 class VerifyView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)  # ทำงานตลอดแม้ bot restart
+        super().__init__(timeout=None)
 
-    @discord.ui.button(
-        label="ยืนยันตัวตน",
-        emoji="✅",
-        style=discord.ButtonStyle.success,
-        custom_id="persistent:verify"
-    )
+    @discord.ui.button(label="ยืนยันตัวตน", emoji="✅", style=discord.ButtonStyle.success, custom_id="persistent:verify")
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-
-        guild_id = str(interaction.guild_id)
-        config = load_config()
-
-        if guild_id not in config:
-            await interaction.followup.send(
-                "❌ ยังไม่ได้ตั้งค่าระบบยืนยัน กรุณาติดต่อ Admin",
-                ephemeral=True
-            )
-            return
-
-        role_id = config[guild_id].get("role_id")
+        gcfg = guild_cfg(interaction.guild_id)
+        role_id = gcfg.get("verify_role_id")
         role = interaction.guild.get_role(int(role_id)) if role_id else None
-
         if not role:
-            await interaction.followup.send(
-                "❌ ไม่พบ Role ที่กำหนดไว้ กรุณาติดต่อ Admin",
-                ephemeral=True
-            )
+            await interaction.followup.send("❌ ยังไม่ได้ตั้งค่าระบบยืนยัน กรุณาติดต่อ Admin", ephemeral=True)
             return
-
         member = interaction.user
         if not isinstance(member, discord.Member):
             member = await interaction.guild.fetch_member(interaction.user.id)
-
         if role in member.roles:
-            await interaction.followup.send(
-                f"✅ คุณได้รับการยืนยันแล้ว! (Role: **{role.name}**)",
-                ephemeral=True
-            )
+            await interaction.followup.send(f"✅ คุณได้รับการยืนยันแล้ว! (Role: **{role.name}**)", ephemeral=True)
             return
-
         try:
             await member.add_roles(role, reason="Verify Bot")
-            await interaction.followup.send(
-                f"✅ ยืนยันตัวตนสำเร็จ!\nคุณได้รับ Role: **{role.name}**",
-                ephemeral=True
-            )
-            print(f"[VERIFY] {member} ({member.id}) ได้รับ Role '{role.name}' ใน {interaction.guild.name}")
+            await interaction.followup.send(f"✅ ยืนยันตัวตนสำเร็จ! ได้รับ Role: **{role.name}**", ephemeral=True)
+            print(f"[VERIFY] {member} → {role.name}")
         except discord.Forbidden:
-            await interaction.followup.send(
-                "❌ Bot ไม่มีสิทธิ์กำหนด Role กรุณาตรวจสอบสิทธิ์ของ Bot",
-                ephemeral=True
+            await interaction.followup.send("❌ Bot ไม่มีสิทธิ์กำหนด Role กรุณาตรวจสอบสิทธิ์ของ Bot", ephemeral=True)
+
+
+# ─── Ticket Views ─────────────────────────────────────────────────────────────
+
+class TicketOpenView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="เปิด Ticket", emoji="🎫", style=discord.ButtonStyle.primary, custom_id="persistent:ticket_open")
+    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        gcfg = guild_cfg(guild.id)
+
+        existing = discord.utils.get(guild.text_channels, name=f"ticket-{interaction.user.name.lower()}")
+        if existing:
+            await interaction.followup.send(f"❌ คุณมี Ticket อยู่แล้วที่ {existing.mention}", ephemeral=True)
+            return
+
+        category_id = gcfg.get("ticket_category_id")
+        category = guild.get_channel(int(category_id)) if category_id else None
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, read_message_history=True),
+        }
+        staff_role_id = gcfg.get("ticket_staff_role_id")
+        if staff_role_id:
+            staff_role = guild.get_role(int(staff_role_id))
+            if staff_role:
+                overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+
+        try:
+            channel = await guild.create_text_channel(
+                f"ticket-{interaction.user.name}",
+                category=category,
+                overwrites=overwrites,
+                reason=f"Ticket by {interaction.user}"
             )
         except Exception as e:
-            await interaction.followup.send(f"❌ เกิดข้อผิดพลาด: {e}", ephemeral=True)
+            await interaction.followup.send(f"❌ สร้าง Ticket ไม่สำเร็จ: {e}", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🎫 Ticket เปิดแล้ว",
+            description=f"สวัสดี {interaction.user.mention}!\nทีมงานจะตอบกลับโดยเร็ว\nกรุณาอธิบายปัญหาหรือรายการที่ต้องการ",
+            color=0xDC2626
+        )
+        embed.set_footer(text=f"{guild.name} • Ticket System")
+        await channel.send(content=interaction.user.mention, embed=embed, view=TicketCloseView())
+        await interaction.followup.send(f"✅ Ticket ถูกสร้างที่ {channel.mention}", ephemeral=True)
+        print(f"[TICKET] {interaction.user} เปิด {channel.name}")
 
 
-# ─────────────────────────────────────────────
-# Bot class
-# ─────────────────────────────────────────────
+class TicketCloseView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="ปิด Ticket", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="persistent:ticket_close")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        channel = interaction.channel
+        guild = interaction.guild
+
+        # หา owner จากชื่อช่อง ticket-username หรือ order-username
+        owner = None
+        for prefix in ("ticket-", "order-"):
+            if channel.name.startswith(prefix):
+                uname = channel.name[len(prefix):]
+                owner = discord.utils.find(lambda m: m.name.lower() == uname.lower(), guild.members)
+                break
+
+        # ส่ง DM แจ้งปิด Ticket
+        if owner and owner != guild.me:
+            try:
+                dm_embed = discord.Embed(
+                    title="🔒 Ticket ถูกปิดแล้ว",
+                    description=f"Ticket ของคุณใน **{guild.name}** ถูกปิดโดย {interaction.user.mention}\nหากมีคำถามเพิ่มเติมสามารถเปิด Ticket ใหม่ได้เลย",
+                    color=0xDC2626
+                )
+                dm_embed.set_footer(text=f"{guild.name} • Ticket System")
+                await owner.send(embed=dm_embed)
+                print(f"[TICKET] ส่ง DM ถึง {owner}")
+            except Exception:
+                pass
+
+        embed = discord.Embed(
+            title="🔒 Ticket กำลังปิด",
+            description=f"ปิดโดย {interaction.user.mention} — ลบช่องใน 5 วินาที",
+            color=0x808080
+        )
+        await channel.send(embed=embed)
+        await asyncio.sleep(5)
+        try:
+            await channel.delete(reason=f"Ticket closed by {interaction.user}")
+        except Exception as e:
+            await channel.send(f"❌ ลบช่องไม่สำเร็จ: {e}")
+
+
+# ─── Giveaway View ────────────────────────────────────────────────────────────
+
+class GiveawayView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="เข้าร่วม 🎉", style=discord.ButtonStyle.success, custom_id="persistent:giveaway_join")
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        cfg = load_config()
+        gid = str(interaction.guild_id)
+        msg_id = str(interaction.message.id)
+        giveaways = cfg.get(gid, {}).get("giveaways", {})
+
+        if msg_id not in giveaways:
+            await interaction.followup.send("❌ Giveaway นี้ไม่พบในระบบ", ephemeral=True)
+            return
+
+        uid = str(interaction.user.id)
+        participants = giveaways[msg_id].setdefault("participants", [])
+
+        if uid in participants:
+            participants.remove(uid)
+            msg_text = "❌ ออกจาก Giveaway แล้ว"
+        else:
+            participants.append(uid)
+            msg_text = "✅ เข้าร่วม Giveaway สำเร็จ!"
+
+        save_config(cfg)
+        await interaction.followup.send(msg_text, ephemeral=True)
+
+        # อัพเดตจำนวนผู้เข้าร่วม
+        try:
+            count = len(participants)
+            embed = interaction.message.embeds[0]
+            new_embed = discord.Embed(title=embed.title, description=embed.description, color=embed.color)
+            new_embed.set_footer(text=embed.footer.text if embed.footer else "")
+            for field in embed.fields:
+                if field.name == "ผู้เข้าร่วม":
+                    new_embed.add_field(name="ผู้เข้าร่วม", value=f"🎟️ {count} คน", inline=True)
+                else:
+                    new_embed.add_field(name=field.name, value=field.value, inline=field.inline)
+            await interaction.message.edit(embed=new_embed)
+        except Exception:
+            pass
+
+
+# ─── Shop View ────────────────────────────────────────────────────────────────
+
+class ShopBuyView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🛒 สั่งซื้อ", style=discord.ButtonStyle.success, custom_id="persistent:shop_buy")
+    async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        gcfg = guild_cfg(guild.id)
+
+        existing = discord.utils.get(guild.text_channels, name=f"order-{interaction.user.name.lower()}")
+        if existing:
+            await interaction.followup.send(f"❌ คุณมี Order อยู่แล้วที่ {existing.mention}", ephemeral=True)
+            return
+
+        category_id = gcfg.get("ticket_category_id")
+        category = guild.get_channel(int(category_id)) if category_id else None
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
+        }
+        staff_role_id = gcfg.get("ticket_staff_role_id")
+        if staff_role_id:
+            staff_role = guild.get_role(int(staff_role_id))
+            if staff_role:
+                overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+
+        try:
+            channel = await guild.create_text_channel(
+                f"order-{interaction.user.name}",
+                category=category,
+                overwrites=overwrites,
+            )
+        except Exception as e:
+            await interaction.followup.send(f"❌ สร้าง Order ไม่สำเร็จ: {e}", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🛒 Order เปิดแล้ว",
+            description=f"สวัสดี {interaction.user.mention}!\nกรุณาระบุ:\n- รายการที่ต้องการสั่งซื้อ\n- ช่องทางชำระเงิน\n- ข้อมูลติดต่อ",
+            color=0x00AA00
+        )
+        await channel.send(content=interaction.user.mention, embed=embed, view=TicketCloseView())
+        await interaction.followup.send(f"✅ ช่อง Order ถูกสร้างที่ {channel.mention}", ephemeral=True)
+
+
+# ─── Bot ──────────────────────────────────────────────────────────────────────
 
 class VerifyBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.none()
         intents.guilds = True
+        intents.members = True  # ต้องเปิด Server Members Intent ใน Developer Portal ด้วย
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        self.add_view(VerifyView())
+        for view in [VerifyView(), TicketOpenView(), TicketCloseView(), GiveawayView(), ShopBuyView()]:
+            self.add_view(view)
+        self.check_giveaways.start()
         try:
             await self.tree.sync()
             print("[BOT] Slash commands synced.")
         except Exception as e:
-            print(f"[BOT] Warning: failed to sync commands: {e}")
+            print(f"[BOT] Sync failed: {e}")
 
     async def on_ready(self):
-        activity = discord.Activity(
-            type=discord.ActivityType.watching,
-            name="การยืนยันตัวตน"
+        await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Daslo Store 🚀"))
+        print(f"[BOT] ✅ Online: {self.user} | Servers: {len(self.guilds)}")
+
+    async def on_member_join(self, member: discord.Member):
+        gcfg = guild_cfg(member.guild.id)
+        ch_id = gcfg.get("welcome_channel_id")
+        if not ch_id:
+            return
+        channel = member.guild.get_channel(int(ch_id))
+        if not channel:
+            return
+        embed = discord.Embed(
+            title=f"🎉 ยินดีต้อนรับสู่ {member.guild.name}!",
+            description=f"สวัสดี {member.mention}!\nยินดีต้อนรับเข้าสู่เซิร์ฟเวอร์\nกรุณายืนยันตัวตนเพื่อเข้าใช้งาน",
+            color=0xDC2626
         )
-        await self.change_presence(activity=activity)
-        print(f"[BOT] ✅ Online as {self.user}  (ID: {self.user.id})")
-        print(f"[BOT] Servers: {len(self.guilds)}")
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(
+            text=f"{member.guild.name} • สมาชิกคนที่ {member.guild.member_count}",
+            icon_url=member.guild.icon.url if member.guild.icon else None
+        )
+        try:
+            await channel.send(embed=embed)
+        except Exception:
+            pass
+
+    @tasks.loop(minutes=1)
+    async def check_giveaways(self):
+        cfg = load_config()
+        changed = False
+        for gid, gcfg in list(cfg.items()):
+            giveaways = gcfg.get("giveaways", {})
+            ended = []
+            for msg_id, gdata in giveaways.items():
+                end_iso = gdata.get("end_time")
+                if not end_iso or datetime.now(timezone.utc) < datetime.fromisoformat(end_iso):
+                    continue
+                guild = self.get_guild(int(gid))
+                if not guild:
+                    ended.append(msg_id)
+                    continue
+                channel = guild.get_channel(int(gdata.get("channel_id", 0)))
+                participants = gdata.get("participants", [])
+                prize = gdata.get("prize", "รางวัล")
+                n = int(gdata.get("winners", 1))
+                if participants:
+                    winners = random.sample(participants, min(n, len(participants)))
+                    winner_text = " ".join(f"<@{w}>" for w in winners)
+                else:
+                    winner_text = "ไม่มีผู้เข้าร่วม"
+                if channel:
+                    try:
+                        msg = await channel.fetch_message(int(msg_id))
+                        result_embed = discord.Embed(
+                            title="🏆 Giveaway สิ้นสุดแล้ว!",
+                            description=f"**รางวัล:** {prize}\n**ผู้ชนะ:** {winner_text}",
+                            color=0xFFD700
+                        )
+                        await msg.edit(embed=result_embed, view=None)
+                        await channel.send(f"🎊 ขอแสดงความยินดีกับ {winner_text}! ได้รับ **{prize}**!")
+                    except Exception:
+                        pass
+                ended.append(msg_id)
+                changed = True
+            for mid in ended:
+                del cfg[gid]["giveaways"][mid]
+        if changed:
+            save_config(cfg)
+
+    @check_giveaways.before_loop
+    async def before_giveaways(self):
+        await self.wait_until_ready()
 
 
 bot = VerifyBot()
 
 
-# ─────────────────────────────────────────────
-# Global app command error handler
-# ─────────────────────────────────────────────
+# ─── Global error handler ─────────────────────────────────────────────────────
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -149,123 +379,268 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     print(f"[ERROR] {interaction.command.name if interaction.command else '?'}: {error}")
 
 
-# ─────────────────────────────────────────────
-# Slash commands
-# ─────────────────────────────────────────────
+# ─── Verify ───────────────────────────────────────────────────────────────────
 
-@bot.tree.command(name="setup_verify", description="ตั้งค่าระบบยืนยันตัวตน — รันคำสั่งนี้ในช่องที่ต้องการวางปุ่มยืนยัน (Admin เท่านั้น)")
-@app_commands.describe(
-    role="Role ที่จะมอบให้เมื่อยืนยันสำเร็จ",
-    title="หัวข้อ embed (default: ชื่อ server)",
-    message="ข้อความใน embed",
-    image_url="URL รูปภาพใน embed (ไม่จำเป็น)",
-    color="สี hex ของ embed เช่น ff0000 (default: แดง)",
-)
+@bot.tree.command(name="setup_verify", description="ตั้งค่าระบบยืนยันตัวตน — รันในช่องที่ต้องการวางปุ่ม (Admin)")
+@app_commands.describe(role="Role ที่จะมอบ", title="หัวข้อ embed", message="ข้อความใน embed", image_url="URL รูปภาพ", color="สี hex เช่น ff0000")
 @app_commands.default_permissions(administrator=True)
-async def setup_verify(
-    interaction: discord.Interaction,
-    role: discord.Role,
-    title: str = None,
-    message: str = "! กรุณายืนยันตัวตนเพื่อเข้าใช้งานเซิร์ฟเวอร์",
-    image_url: str = None,
-    color: str = "DC2626",
-):
+async def setup_verify(interaction: discord.Interaction, role: discord.Role, title: str = None,
+                       message: str = "กรุณายืนยันตัวตนเพื่อเข้าใช้งานเซิร์ฟเวอร์",
+                       image_url: str = None, color: str = "DC2626"):
     await interaction.response.defer(ephemeral=True)
-
-    channel_id = interaction.channel_id
-
-    # ตรวจสอบ hex color
     try:
         embed_color = int(color.lstrip("#"), 16)
     except ValueError:
         embed_color = 0xDC2626
-
-    # บันทึก config
-    cfg = load_config()
-    cfg[str(interaction.guild_id)] = {
-        "role_id": str(role.id),
-        "channel_id": str(channel_id),
-    }
-    save_config(cfg)
-
-    # ถ้าไม่ได้ใส่รูป → ใช้โลโก้ server อัตโนมัติ
+    channel_id = interaction.channel_id
+    update_guild(interaction.guild_id, verify_role_id=str(role.id), verify_channel_id=str(channel_id))
     final_image = image_url or (interaction.guild.icon.url if interaction.guild.icon else None)
-
-    # สร้าง embed
-    embed = discord.Embed(
-        title=title or interaction.guild.name,
-        description=f"🛡️  **{message}**",
-        color=embed_color
-    )
-    embed.set_footer(
-        text=f"{interaction.guild.name} • Powered by Verify Bot",
-        icon_url=interaction.guild.icon.url if interaction.guild.icon else None
-    )
+    embed = discord.Embed(title=title or interaction.guild.name, description=f"🛡️  **{message}**", color=embed_color)
+    embed.set_footer(text=f"{interaction.guild.name} • Powered by Verify Bot",
+                     icon_url=interaction.guild.icon.url if interaction.guild.icon else None)
     if final_image:
         embed.set_image(url=final_image)
-
-    view = VerifyView()
     try:
         channel = interaction.channel or await interaction.guild.fetch_channel(channel_id)
-        await channel.send(embed=embed, view=view)
+        await channel.send(embed=embed, view=VerifyView())
     except discord.Forbidden:
-        await interaction.followup.send(
-            "❌ Bot ไม่มีสิทธิ์ส่งข้อความในช่องนี้ กรุณาเพิ่มสิทธิ์ Send Messages และ Embed Links ให้ Bot",
-            ephemeral=True
-        )
+        await interaction.followup.send("❌ Bot ไม่มีสิทธิ์ส่งข้อความในช่องนี้", ephemeral=True)
         return
     except Exception as e:
-        await interaction.followup.send(f"❌ ส่งข้อความยืนยันไม่สำเร็จ: {e}", ephemeral=True)
+        await interaction.followup.send(f"❌ เกิดข้อผิดพลาด: {e}", ephemeral=True)
         return
+    await interaction.followup.send(f"✅ ตั้งค่าสำเร็จ!\n📌 ช่อง: <#{channel_id}>\n🎖️ Role: **{role.name}**", ephemeral=True)
 
+
+@bot.tree.command(name="verify_info", description="ดูการตั้งค่าระบบยืนยัน (Admin)")
+@app_commands.default_permissions(administrator=True)
+async def verify_info(interaction: discord.Interaction):
+    gcfg = guild_cfg(interaction.guild_id)
+    if "verify_role_id" not in gcfg:
+        await interaction.response.send_message("❌ ยังไม่ได้ตั้งค่า", ephemeral=True)
+        return
+    role = interaction.guild.get_role(int(gcfg["verify_role_id"]))
+    embed = discord.Embed(title="⚙️ การตั้งค่าระบบยืนยัน", color=0xDC2626)
+    embed.add_field(name="Role", value=role.mention if role else "❌ ไม่พบ", inline=True)
+    embed.add_field(name="ช่อง", value=f"<#{gcfg['verify_channel_id']}>", inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ─── Welcome ──────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="setup_welcome", description="ตั้งค่าห้อง Welcome — รันในช่องที่ต้องการ (Admin)")
+@app_commands.default_permissions(administrator=True)
+async def setup_welcome(interaction: discord.Interaction):
+    update_guild(interaction.guild_id, welcome_channel_id=str(interaction.channel_id))
+    await interaction.response.send_message(
+        f"✅ ตั้งค่า Welcome ที่ <#{interaction.channel_id}> แล้ว", ephemeral=True)
+
+
+# ─── Ticket ───────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="setup_ticket", description="ตั้งค่าระบบ Ticket — รันในช่องที่ต้องการวางปุ่ม (Admin)")
+@app_commands.describe(staff_role="Role ที่จะเห็น Ticket ทั้งหมด", category="Category ที่จะสร้างช่อง Ticket")
+@app_commands.default_permissions(administrator=True)
+async def setup_ticket(interaction: discord.Interaction, staff_role: discord.Role = None, category: discord.CategoryChannel = None):
+    await interaction.response.defer(ephemeral=True)
+    updates = {}
+    if staff_role:
+        updates["ticket_staff_role_id"] = str(staff_role.id)
+    if category:
+        updates["ticket_category_id"] = str(category.id)
+    update_guild(interaction.guild_id, **updates)
+
+    embed = discord.Embed(
+        title="🎫 ระบบ Support Ticket",
+        description="กดปุ่มด้านล่างเพื่อเปิด Ticket\nทีมงานจะตอบกลับโดยเร็วที่สุด",
+        color=0xDC2626
+    )
+    embed.set_footer(text=f"{interaction.guild.name} • Ticket System")
+    try:
+        channel = interaction.channel or await interaction.guild.fetch_channel(interaction.channel_id)
+        await channel.send(embed=embed, view=TicketOpenView())
+    except discord.Forbidden:
+        await interaction.followup.send("❌ Bot ไม่มีสิทธิ์ส่งข้อความในช่องนี้", ephemeral=True)
+        return
     await interaction.followup.send(
-        f"✅ ตั้งค่าสำเร็จ!\n"
-        f"📌 ช่อง: <#{channel_id}>\n"
-        f"🎖️ Role: **{role.name}**",
+        f"✅ ตั้งค่า Ticket สำเร็จ!\n"
+        f"📌 ช่อง: <#{interaction.channel_id}>\n"
+        f"👥 Staff: {staff_role.mention if staff_role else 'ไม่ได้ตั้ง'}\n"
+        f"📁 Category: {category.name if category else 'ไม่ได้ตั้ง'}",
         ephemeral=True
     )
 
 
-@bot.tree.command(name="verify_info", description="ดูการตั้งค่าระบบยืนยันตัวตนปัจจุบัน")
-@app_commands.default_permissions(administrator=True)
-async def verify_info(interaction: discord.Interaction):
-    cfg = load_config()
-    guild_id = str(interaction.guild_id)
+# ─── Giveaway ─────────────────────────────────────────────────────────────────
 
-    if guild_id not in cfg:
-        await interaction.response.send_message("❌ ยังไม่ได้ตั้งค่าระบบยืนยัน", ephemeral=True)
+@bot.tree.command(name="giveaway", description="เริ่ม Giveaway ในช่องนี้ (Admin)")
+@app_commands.describe(prize="รางวัล", duration="ระยะเวลา เช่น 10m 1h 1d", winners="จำนวนผู้ชนะ")
+@app_commands.default_permissions(administrator=True)
+async def giveaway_cmd(interaction: discord.Interaction, prize: str, duration: str, winners: int = 1):
+    await interaction.response.defer(ephemeral=True)
+    unit = duration[-1].lower()
+    try:
+        amount = int(duration[:-1])
+    except ValueError:
+        await interaction.followup.send("❌ รูปแบบเวลาไม่ถูกต้อง ใช้ 10m, 1h, 1d", ephemeral=True)
+        return
+    multipliers = {"m": 60, "h": 3600, "d": 86400}
+    if unit not in multipliers:
+        await interaction.followup.send("❌ ใช้ m (นาที), h (ชั่วโมง), d (วัน)", ephemeral=True)
+        return
+    end_time = datetime.now(timezone.utc) + timedelta(seconds=amount * multipliers[unit])
+
+    embed = discord.Embed(title="🎉 GIVEAWAY!", description=f"**รางวัล:** {prize}\n\nกดปุ่มด้านล่างเพื่อเข้าร่วม!", color=0xFFD700)
+    embed.add_field(name="สิ้นสุด", value=f"<t:{int(end_time.timestamp())}:R>", inline=True)
+    embed.add_field(name="ผู้ชนะ", value=f"🏆 {winners} คน", inline=True)
+    embed.add_field(name="ผู้เข้าร่วม", value="🎟️ 0 คน", inline=True)
+    embed.set_footer(text=f"โดย {interaction.user.name}")
+
+    try:
+        channel = interaction.channel or await interaction.guild.fetch_channel(interaction.channel_id)
+        msg = await channel.send(embed=embed, view=GiveawayView())
+    except Exception as e:
+        await interaction.followup.send(f"❌ เกิดข้อผิดพลาด: {e}", ephemeral=True)
         return
 
-    data = cfg[guild_id]
-    role = interaction.guild.get_role(int(data["role_id"]))
-    channel = interaction.guild.get_channel(int(data["channel_id"]))
-
-    embed = discord.Embed(title="⚙️ การตั้งค่าระบบยืนยันตัวตน", color=0xDC2626)
-    embed.add_field(name="Role", value=role.mention if role else "❌ ไม่พบ", inline=True)
-    embed.add_field(name="ช่อง", value=channel.mention if channel else "❌ ไม่พบ", inline=True)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-@bot.tree.command(name="verify_reset", description="ลบการตั้งค่าระบบยืนยันของ server นี้")
-@app_commands.default_permissions(administrator=True)
-async def verify_reset(interaction: discord.Interaction):
     cfg = load_config()
-    guild_id = str(interaction.guild_id)
-    if guild_id in cfg:
-        del cfg[guild_id]
+    cfg.setdefault(str(interaction.guild_id), {}).setdefault("giveaways", {})[str(msg.id)] = {
+        "prize": prize, "winners": winners,
+        "channel_id": str(interaction.channel_id),
+        "end_time": end_time.isoformat(),
+        "participants": []
+    }
+    save_config(cfg)
+    await interaction.followup.send(f"✅ Giveaway เริ่มแล้ว! สิ้นสุดใน {duration}", ephemeral=True)
+
+
+# ─── Shop ─────────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="setup_shop", description="ส่ง embed ร้านค้าในช่องนี้ (Admin)")
+@app_commands.describe(shop_type="ประเภทร้านค้า")
+@app_commands.choices(shop_type=[
+    app_commands.Choice(name="App Premium (Netflix, YouTube ฯลฯ)", value="apps"),
+    app_commands.Choice(name="Discord Nitro", value="nitro"),
+])
+@app_commands.default_permissions(administrator=True)
+async def setup_shop(interaction: discord.Interaction, shop_type: str):
+    await interaction.response.defer(ephemeral=True)
+    gcfg = guild_cfg(interaction.guild_id)
+    guild = interaction.guild
+
+    if shop_type == "apps":
+        products = gcfg.get("shop_apps", [
+            {"name": "Netflix Premium", "price": "xxx บาท/เดือน", "desc": "4K | 4 อุปกรณ์ | ไม่มีโฆษณา"},
+            {"name": "YouTube Premium", "price": "xxx บาท/เดือน", "desc": "ไม่มีโฆษณา | Download | Background"},
+            {"name": "Spotify Premium", "price": "xxx บาท/เดือน", "desc": "ฟังเพลงไม่จำกัด | Download | ไม่มีโฆษณา"},
+        ])
+        embed = discord.Embed(title="📱 APP PREMIUM SHOP", description="แอปพรีเมี่ยมราคาถูก คุณภาพเต็ม ๆ\nกด **สั่งซื้อ** เพื่อเปิดช่อง Order", color=0xE50914)
+    else:
+        products = gcfg.get("shop_nitro", [
+            {"name": "Nitro Basic", "price": "xxx บาท/เดือน", "desc": "Custom emoji | Animated avatar | 50MB upload"},
+            {"name": "Nitro", "price": "xxx บาท/เดือน", "desc": "Server Boost | 500MB upload | ทุกอย่างใน Basic"},
+        ])
+        embed = discord.Embed(title="💎 DISCORD NITRO SHOP", description="Nitro ราคาพิเศษ\nกด **สั่งซื้อ** เพื่อเปิดช่อง Order", color=0x5865F2)
+
+    for p in products:
+        embed.add_field(name=f"✨ {p['name']}", value=f"💰 {p['price']}\n📋 {p['desc']}", inline=True)
+    embed.set_footer(text=f"{guild.name} • Shop")
+
+    try:
+        channel = interaction.channel or await interaction.guild.fetch_channel(interaction.channel_id)
+        await channel.send(embed=embed, view=ShopBuyView())
+    except Exception as e:
+        await interaction.followup.send(f"❌ เกิดข้อผิดพลาด: {e}", ephemeral=True)
+        return
+    await interaction.followup.send("✅ ส่ง Shop embed สำเร็จ!", ephemeral=True)
+
+
+@bot.tree.command(name="shop_product", description="เพิ่ม/ลบสินค้าในร้าน (Admin)")
+@app_commands.describe(action="เพิ่มหรือลบ", shop_type="ประเภทร้านค้า", name="ชื่อสินค้า", price="ราคา", description="รายละเอียด")
+@app_commands.choices(
+    action=[app_commands.Choice(name="เพิ่ม", value="add"), app_commands.Choice(name="ลบ", value="remove")],
+    shop_type=[app_commands.Choice(name="App Premium", value="apps"), app_commands.Choice(name="Nitro", value="nitro")]
+)
+@app_commands.default_permissions(administrator=True)
+async def shop_product(interaction: discord.Interaction, action: str, shop_type: str, name: str, price: str = "", description: str = ""):
+    cfg = load_config()
+    gid = str(interaction.guild_id)
+    key = f"shop_{shop_type}"
+    products = cfg.setdefault(gid, {}).setdefault(key, [])
+    if action == "add":
+        products.append({"name": name, "price": price, "desc": description})
         save_config(cfg)
-    await interaction.response.send_message("✅ ลบการตั้งค่าสำเร็จ", ephemeral=True)
+        await interaction.response.send_message(f"✅ เพิ่มสินค้า **{name}** สำเร็จ\nใช้ `/setup_shop` ใหม่เพื่ออัพเดต embed", ephemeral=True)
+    else:
+        before = len(products)
+        products[:] = [p for p in products if p["name"].lower() != name.lower()]
+        save_config(cfg)
+        if len(products) < before:
+            await interaction.response.send_message(f"✅ ลบสินค้า **{name}** สำเร็จ", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ ไม่พบสินค้า **{name}**", ephemeral=True)
 
 
-# ─────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────
+# ─── Credit ───────────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="setup_credit", description="ตั้งค่าช่อง Credit Log — รันในช่องที่ต้องการ (Admin)")
+@app_commands.default_permissions(administrator=True)
+async def setup_credit(interaction: discord.Interaction):
+    update_guild(interaction.guild_id, credit_channel_id=str(interaction.channel_id))
+    await interaction.response.send_message(f"✅ ตั้งค่าช่อง Credit Log ที่ <#{interaction.channel_id}> แล้ว", ephemeral=True)
+
+
+@bot.tree.command(name="credit", description="บันทึกการส่งของให้ลูกค้าเรียบร้อย (Admin)")
+@app_commands.describe(user="ลูกค้า", item="รายการที่ส่ง", note="หมายเหตุ")
+@app_commands.default_permissions(administrator=True)
+async def credit(interaction: discord.Interaction, user: discord.Member, item: str, note: str = ""):
+    await interaction.response.defer(ephemeral=True)
+    gcfg = guild_cfg(interaction.guild_id)
+    ch_id = gcfg.get("credit_channel_id")
+
+    embed = discord.Embed(title="✅ ส่งของเรียบร้อย", color=0x00AA00, timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="ลูกค้า", value=user.mention, inline=True)
+    embed.add_field(name="รายการ", value=item, inline=True)
+    embed.add_field(name="ผู้ดำเนินการ", value=interaction.user.mention, inline=True)
+    if note:
+        embed.add_field(name="หมายเหตุ", value=note, inline=False)
+
+    sent_log = False
+    if ch_id:
+        log_channel = interaction.guild.get_channel(int(ch_id))
+        if log_channel:
+            try:
+                await log_channel.send(embed=embed)
+                sent_log = True
+            except Exception:
+                pass
+
+    # ส่ง DM ให้ลูกค้า
+    try:
+        dm_embed = discord.Embed(
+            title="📦 รายการของคุณถูกส่งแล้ว!",
+            description=f"**รายการ:** {item}" + (f"\n**หมายเหตุ:** {note}" if note else ""),
+            color=0x00AA00
+        )
+        dm_embed.set_footer(text=interaction.guild.name)
+        await user.send(embed=dm_embed)
+    except Exception:
+        pass
+
+    await interaction.followup.send(
+        f"✅ บันทึกสำเร็จ!\n👤 {user.mention} — **{item}**"
+        + (f"\n📋 Log บันทึกไปที่ช่อง credit แล้ว" if sent_log else "\n⚠️ ยังไม่ได้ตั้งช่อง Credit Log (ใช้ /setup_credit)"),
+        ephemeral=True
+    )
+
+
+# ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     token = os.getenv("VERIFY_BOT_TOKEN")
     if not token:
         print("=" * 50)
-        print("  Discord Verification Role Bot")
+        print("  Bunmee Store Discord Bot")
         print("=" * 50)
         token = input("กรอก Bot Token: ").strip()
         if not token:
@@ -276,9 +651,9 @@ if __name__ == "__main__":
     while True:
         try:
             bot.run(token, log_handler=None)
-            break  # ออกปกติ (KeyboardInterrupt จะถูก handle โดย discord.py แล้ว break)
+            break
         except discord.LoginFailure:
-            print("❌ Token ไม่ถูกต้อง กรุณาตรวจสอบ Bot Token")
+            print("❌ Token ไม่ถูกต้อง")
             sys.exit(1)
         except KeyboardInterrupt:
             print("\n[BOT] ปิด Bot แล้ว")
