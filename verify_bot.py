@@ -107,7 +107,8 @@ class VerifyView(discord.ui.View):
 
 class VerifyBot(commands.Bot):
     def __init__(self):
-        intents = discord.Intents.default()
+        intents = discord.Intents.none()
+        intents.guilds = True
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
