@@ -29,6 +29,15 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip discord.py==2.6.2
 
+      - name: Check required secrets
+        run: |
+          if [ -z "$VERIFY_BOT_TOKEN" ]; then
+            echo "::error::Missing GitHub secret VERIFY_BOT_TOKEN. Add it in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+        env:
+          VERIFY_BOT_TOKEN: ${{ secrets.VERIFY_BOT_TOKEN }}
+
       - name: Run bot
         run: python -u verify_bot.py
         env:
