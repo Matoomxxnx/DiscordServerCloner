@@ -165,7 +165,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 @app_commands.default_permissions(administrator=True)
 async def setup_verify(
     interaction: discord.Interaction,
-    channel: discord.TextChannel,
+    channel: discord.abc.GuildChannel,
     role: discord.Role,
     title: str = None,
     message: str = "! กรุณายืนยันตัวตนเพื่อเข้าใช้งานเซิร์ฟเวอร์",
@@ -173,6 +173,13 @@ async def setup_verify(
     color: str = "DC2626",
 ):
     await interaction.response.defer(ephemeral=True)
+
+    if not isinstance(channel, discord.abc.Messageable):
+        await interaction.followup.send(
+            "❌ กรุณาเลือกช่องข้อความ (Text Channel) เท่านั้น ไม่สามารถใช้ Forum หรือ Category ได้",
+            ephemeral=True
+        )
+        return
 
     # ตรวจสอบ hex color
     try:
