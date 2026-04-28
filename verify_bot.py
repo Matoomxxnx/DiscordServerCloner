@@ -112,8 +112,11 @@ class VerifyBot(commands.Bot):
 
     async def setup_hook(self):
         self.add_view(VerifyView())
-        await self.tree.sync()
-        print("[BOT] Slash commands synced.")
+        try:
+            await self.tree.sync()
+            print("[BOT] Slash commands synced.")
+        except Exception as e:
+            print(f"[BOT] Warning: failed to sync commands: {e}")
 
     async def on_ready(self):
         activity = discord.Activity(
@@ -126,6 +129,23 @@ class VerifyBot(commands.Bot):
 
 
 bot = VerifyBot()
+
+
+# ─────────────────────────────────────────────
+# Global app command error handler
+# ─────────────────────────────────────────────
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    msg = f"❌ เกิดข้อผิดพลาด: {error}"
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except Exception:
+        pass
+    print(f"[ERROR] {interaction.command.name if interaction.command else '?'}: {error}")
 
 
 # ─────────────────────────────────────────────
@@ -250,10 +270,18 @@ if __name__ == "__main__":
             print("❌ ต้องการ Token เพื่อรัน Bot")
             sys.exit(1)
 
-    try:
-        bot.run(token, log_handler=None)
-    except discord.LoginFailure:
-        print("❌ Token ไม่ถูกต้อง กรุณาตรวจสอบ Bot Token")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        print("\n[BOT] ปิด Bot แล้ว")
+    import time
+    while True:
+        try:
+            bot.run(token, log_handler=None)
+            break  # ออกปกติ (KeyboardInterrupt จะถูก handle โดย discord.py แล้ว break)
+        except discord.LoginFailure:
+            print("❌ Token ไม่ถูกต้อง กรุณาตรวจสอบ Bot Token")
+            sys.exit(1)
+        except KeyboardInterrupt:
+            print("\n[BOT] ปิด Bot แล้ว")
+            break
+        except Exception as e:
+            print(f"[BOT] Crash: {e} — restarting in 30s...")
+            time.sleep(30)
+            bot = VerifyBot()
