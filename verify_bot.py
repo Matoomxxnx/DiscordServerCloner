@@ -53,7 +53,7 @@ class VerifyView(discord.ui.View):
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         gcfg = guild_cfg(interaction.guild_id)
-        role_id = gcfg.get("verify_role_id")
+        role_id = gcfg.get("verify_role_id") or gcfg.get("role_id")
         role = interaction.guild.get_role(int(role_id)) if role_id else None
         if not role:
             await interaction.followup.send("❌ ยังไม่ได้ตั้งค่าระบบยืนยัน กรุณาติดต่อ Admin", ephemeral=True)
