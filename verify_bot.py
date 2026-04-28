@@ -284,9 +284,10 @@ class VerifyBot(commands.Bot):
     async def on_ready(self):
         await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Daslo Store 🚀"))
         print(f"[BOT] ✅ Online: {self.user} | Servers: {len(self.guilds)}")
-        # Guild sync ขึ้นทันที ไม่ต้องรอ 1 ชั่วโมงแบบ global sync
+        # copy global commands → guild แล้ว sync ทันที (ไม่ต้องรอ 1 ชั่วโมง)
         for guild in self.guilds:
             try:
+                self.tree.copy_global_to(guild=guild)
                 await self.tree.sync(guild=guild)
                 print(f"[BOT] Synced to {guild.name}")
             except Exception as e:
