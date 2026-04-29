@@ -1,6 +1,8 @@
 name: Discord Verify Bot
 
 on:
+  push:
+    branches: ["main"]     # push โค้ดใหม่แล้วให้ GitHub Actions รีสตาร์ทบอททันที
   schedule:
     - cron: "0 */5 * * *"   # รีสตาร์ทอัตโนมัติทุก 5 ชั่วโมง เพื่อให้บอทออนไลน์ต่อเนื่องบน GitHub Actions
   workflow_dispatch:          # กดรันมือได้จาก GitHub

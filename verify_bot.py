@@ -219,52 +219,110 @@ class GiveawayView(discord.ui.View):
 
 # ─── Shop View ────────────────────────────────────────────────────────────────
 
+async def open_order_channel(interaction: discord.Interaction, order_note: str = ""):
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    gcfg = guild_cfg(guild.id)
+
+    existing = discord.utils.get(guild.text_channels, name=f"order-{interaction.user.name.lower()}")
+    if existing:
+        await interaction.followup.send(f"❌ คุณมี Order อยู่แล้วที่ {existing.mention}", ephemeral=True)
+        return
+
+    category_id = gcfg.get("ticket_category_id")
+    category = guild.get_channel(int(category_id)) if category_id else None
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
+    }
+    staff_role_id = gcfg.get("ticket_staff_role_id")
+    if staff_role_id:
+        staff_role = guild.get_role(int(staff_role_id))
+        if staff_role:
+            overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+
+    try:
+        channel = await guild.create_text_channel(
+            f"order-{interaction.user.name}",
+            category=category,
+            overwrites=overwrites,
+        )
+    except Exception as e:
+        await interaction.followup.send(f"❌ สร้าง Order ไม่สำเร็จ: {e}", ephemeral=True)
+        return
+
+    note_text = f"\n\n**รายการที่เลือก:** {order_note}" if order_note else ""
+    embed = discord.Embed(
+        title="🛒 Order เปิดแล้ว",
+        description=(
+            f"สวัสดี {interaction.user.mention}!\n"
+            "กรุณาระบุ:\n"
+            "- รายการที่ต้องการสั่งซื้อ\n"
+            "- ช่องทางชำระเงิน\n"
+            "- ข้อมูลติดต่อ"
+            f"{note_text}"
+        ),
+        color=0x00AA00
+    )
+    await channel.send(content=interaction.user.mention, embed=embed, view=TicketCloseView())
+    await interaction.followup.send(f"✅ ช่อง Order ถูกสร้างที่ {channel.mention}", ephemeral=True)
+
+
+class NitroProductSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Nitro Basic", description="เลือกแพ็กเกจ Nitro Basic", emoji="✨", value="Nitro Basic"),
+            discord.SelectOption(label="Nitro", description="เลือกแพ็กเกจ Nitro ตัวเต็ม", emoji="💎", value="Nitro"),
+            discord.SelectOption(label="Server Boost", description="เลือกแพ็กเกจบูสต์เซิร์ฟเวอร์", emoji="🚀", value="Server Boost"),
+        ]
+        super().__init__(
+            placeholder="📦 เลือกประเภทหมวดหมู่สินค้า",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="persistent:nitro_product_select",
+            row=0
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected = self.values[0]
+        await interaction.response.send_message(
+            f"✅ เลือก **{selected}** แล้ว กดปุ่ม **สั่งซื้อ** เพื่อเปิดช่อง Order ได้เลย",
+            ephemeral=True
+        )
+
+
+class NitroShopPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(NitroProductSelect())
+
+    @discord.ui.button(label="เติมเงิน", emoji="💵", style=discord.ButtonStyle.success, custom_id="persistent:shop_topup", row=1)
+    async def topup(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await open_order_channel(interaction, "เติมเงิน")
+
+    @discord.ui.button(label="เช็คยอดเงิน", emoji="👛", style=discord.ButtonStyle.primary, custom_id="persistent:shop_balance", row=1)
+    async def balance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("💰 ระบบเช็คยอดเงินยังไม่ได้เชื่อมฐานข้อมูล กรุณาติดต่อแอดมิน", ephemeral=True)
+
+    @discord.ui.button(label="ประวัติซื้อสินค้า", emoji="📦", style=discord.ButtonStyle.secondary, custom_id="persistent:shop_history", row=1)
+    async def history(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("📋 ระบบประวัติการซื้อยังไม่ได้เชื่อมฐานข้อมูล กรุณาติดต่อแอดมิน", ephemeral=True)
+
+    @discord.ui.button(label="สั่งซื้อ", emoji="🛒", style=discord.ButtonStyle.success, custom_id="persistent:shop_order", row=1)
+    async def order(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await open_order_channel(interaction, "Discord Nitro")
+
+
 class ShopBuyView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="🛒 สั่งซื้อ", style=discord.ButtonStyle.success, custom_id="persistent:shop_buy")
     async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        guild = interaction.guild
-        gcfg = guild_cfg(guild.id)
-
-        existing = discord.utils.get(guild.text_channels, name=f"order-{interaction.user.name.lower()}")
-        if existing:
-            await interaction.followup.send(f"❌ คุณมี Order อยู่แล้วที่ {existing.mention}", ephemeral=True)
-            return
-
-        category_id = gcfg.get("ticket_category_id")
-        category = guild.get_channel(int(category_id)) if category_id else None
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
-        }
-        staff_role_id = gcfg.get("ticket_staff_role_id")
-        if staff_role_id:
-            staff_role = guild.get_role(int(staff_role_id))
-            if staff_role:
-                overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-
-        try:
-            channel = await guild.create_text_channel(
-                f"order-{interaction.user.name}",
-                category=category,
-                overwrites=overwrites,
-            )
-        except Exception as e:
-            await interaction.followup.send(f"❌ สร้าง Order ไม่สำเร็จ: {e}", ephemeral=True)
-            return
-
-        embed = discord.Embed(
-            title="🛒 Order เปิดแล้ว",
-            description=f"สวัสดี {interaction.user.mention}!\nกรุณาระบุ:\n- รายการที่ต้องการสั่งซื้อ\n- ช่องทางชำระเงิน\n- ข้อมูลติดต่อ",
-            color=0x00AA00
-        )
-        await channel.send(content=interaction.user.mention, embed=embed, view=TicketCloseView())
-        await interaction.followup.send(f"✅ ช่อง Order ถูกสร้างที่ {channel.mention}", ephemeral=True)
+        await open_order_channel(interaction)
 
 
 # ─── Bot ──────────────────────────────────────────────────────────────────────
@@ -277,13 +335,14 @@ class VerifyBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        for view in [VerifyView(), TicketOpenView(), TicketCloseView(), GiveawayView(), ShopBuyView()]:
+        for view in [VerifyView(), TicketOpenView(), TicketCloseView(), GiveawayView(), ShopBuyView(), NitroShopPanelView()]:
             self.add_view(view)
         self.check_giveaways.start()
 
     async def on_ready(self):
         await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Daslo Store 🚀"))
         print(f"[BOT] ✅ Online: {self.user} | Servers: {len(self.guilds)}")
+        print("[BOT] ✅ Loaded SHOP UI v2 (Nitro dropdown + buttons)")
         # copy global commands → guild แล้ว sync ทันที (ไม่ต้องรอ 1 ชั่วโมง)
         for guild in self.guilds:
             try:
@@ -520,16 +579,18 @@ async def giveaway_cmd(interaction: discord.Interaction, prize: str, duration: s
 # ─── Shop ─────────────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="setup_shop", description="ส่ง embed ร้านค้าในช่องนี้ (Admin)")
-@app_commands.describe(shop_type="ประเภทร้านค้า")
+@app_commands.describe(shop_type="ประเภทร้านค้า", image_url="URL รูปใหญ่/banner ใน embed (ไม่ใส่ก็ใช้ค่าที่เคยตั้งไว้)")
 @app_commands.choices(shop_type=[
     app_commands.Choice(name="App Premium (Netflix, YouTube ฯลฯ)", value="apps"),
     app_commands.Choice(name="Discord Nitro", value="nitro"),
 ])
 @app_commands.default_permissions(administrator=True)
-async def setup_shop(interaction: discord.Interaction, shop_type: str):
+async def setup_shop(interaction: discord.Interaction, shop_type: str, image_url: str = None):
     await interaction.response.defer(ephemeral=True)
     gcfg = guild_cfg(interaction.guild_id)
     guild = interaction.guild
+    if image_url:
+        update_guild(interaction.guild_id, **{f"shop_{shop_type}_image_url": image_url})
 
     if shop_type == "apps":
         products = gcfg.get("shop_apps", [
@@ -538,24 +599,51 @@ async def setup_shop(interaction: discord.Interaction, shop_type: str):
             {"name": "Spotify Premium", "price": "xxx บาท/เดือน", "desc": "ฟังเพลงไม่จำกัด | Download | ไม่มีโฆษณา"},
         ])
         embed = discord.Embed(title="📱 APP PREMIUM SHOP", description="แอปพรีเมี่ยมราคาถูก คุณภาพเต็ม ๆ\nกด **สั่งซื้อ** เพื่อเปิดช่อง Order", color=0xE50914)
+        view = ShopBuyView()
     else:
         products = gcfg.get("shop_nitro", [
             {"name": "Nitro Basic", "price": "xxx บาท/เดือน", "desc": "Custom emoji | Animated avatar | 50MB upload"},
             {"name": "Nitro", "price": "xxx บาท/เดือน", "desc": "Server Boost | 500MB upload | ทุกอย่างใน Basic"},
         ])
-        embed = discord.Embed(title="💎 DISCORD NITRO SHOP", description="Nitro ราคาพิเศษ\nกด **สั่งซื้อ** เพื่อเปิดช่อง Order", color=0x5865F2)
+        product_lines = "\n".join(
+            f"> ✨ **{p['name']}**\n> 💰 {p['price']}\n> 📋 {p['desc']}"
+            for p in products
+        )
+        embed = discord.Embed(
+            title="🌸 ซื้อไนโตรอัตโนมัติ 🌸",
+            description=(
+                "```"
+                "\n• · ˚ ༘─────────────────────༘˚ · •\n\n"
+                "✦ จำหน่ายไนโตรเบสิก - ไนโตรเต็ม\n"
+                "✦ สำหรับแอคเคาท์ที่ไม่เคยเติมไนโตร\n"
+                "✦ ในโปรโมชั่น 1 เดือน และ 3 เดือน\n"
+                "✦ ในรูปแบบ Gift 1 เดือน\n\n"
+                "• · ˚ ༘─────────────────────༘˚ · •"
+                "```\n"
+                "```diff\n! โปรดอ่านเงื่อนไขก่อนชำระสินค้า !\n```\n"
+                f"{product_lines}"
+            ),
+            color=0xFF0033
+        )
+        view = NitroShopPanelView()
 
-    for p in products:
-        embed.add_field(name=f"✨ {p['name']}", value=f"💰 {p['price']}\n📋 {p['desc']}", inline=True)
+    if shop_type == "apps":
+        for p in products:
+            embed.add_field(name=f"✨ {p['name']}", value=f"💰 {p['price']}\n📋 {p['desc']}", inline=True)
+    final_image = image_url or gcfg.get(f"shop_{shop_type}_image_url")
+    if final_image:
+        embed.set_image(url=final_image)
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
     embed.set_footer(text=f"{guild.name} • Shop")
 
     try:
         channel = interaction.channel or await interaction.guild.fetch_channel(interaction.channel_id)
-        await channel.send(embed=embed, view=ShopBuyView())
+        await channel.send(embed=embed, view=view)
     except Exception as e:
         await interaction.followup.send(f"❌ เกิดข้อผิดพลาด: {e}", ephemeral=True)
         return
-    await interaction.followup.send("✅ ส่ง Shop embed สำเร็จ!", ephemeral=True)
+    await interaction.followup.send("✅ ส่ง Shop embed สำเร็จ! (SHOP UI v2)", ephemeral=True)
 
 
 @bot.tree.command(name="shop_product", description="เพิ่ม/ลบสินค้าในร้าน (Admin)")
