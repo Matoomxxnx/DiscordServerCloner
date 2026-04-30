@@ -332,12 +332,14 @@ class VerifyBot(commands.Bot):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True  # ต้องเปิด Server Members Intent ใน Developer Portal ด้วย
+        intents.voice_states = True
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
         for view in [VerifyView(), TicketOpenView(), TicketCloseView(), GiveawayView(), ShopBuyView(), NitroShopPanelView()]:
             self.add_view(view)
         self.check_giveaways.start()
+        self.keep_voice_connected.start()
 
     async def on_ready(self):
         await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Bunmee Store 🚀"))
@@ -422,6 +424,35 @@ class VerifyBot(commands.Bot):
     async def before_giveaways(self):
         await self.wait_until_ready()
 
+    @tasks.loop(seconds=30)
+    async def keep_voice_connected(self):
+        for guild in self.guilds:
+            gcfg = guild_cfg(guild.id)
+            channel_id = gcfg.get("stay_voice_channel_id")
+            if not channel_id:
+                continue
+
+            channel = guild.get_channel(int(channel_id))
+            if not isinstance(channel, discord.VoiceChannel):
+                continue
+
+            voice_client = guild.voice_client
+            try:
+                if voice_client and voice_client.is_connected():
+                    if voice_client.channel.id != channel.id:
+                        await voice_client.move_to(channel)
+                    continue
+                await channel.connect(self_deaf=True, reconnect=True)
+                print(f"[VOICE] Joined {guild.name} / {channel.name}")
+            except discord.ClientException:
+                pass
+            except Exception as e:
+                print(f"[VOICE] Failed to join {guild.name} / {channel.name}: {e}")
+
+    @keep_voice_connected.before_loop
+    async def before_keep_voice_connected(self):
+        await self.wait_until_ready()
+
 
 bot = VerifyBot()
 
@@ -496,6 +527,58 @@ async def setup_welcome(interaction: discord.Interaction):
     update_guild(interaction.guild_id, welcome_channel_id=str(interaction.channel_id))
     await interaction.response.send_message(
         f"✅ ตั้งค่า Welcome ที่ <#{interaction.channel_id}> แล้ว", ephemeral=True)
+
+
+# ─── Stay Voice ───────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="setup_stay_voice", description="ตั้งห้องเสียงที่ให้บอทเข้าไปอยู่ตลอดเวลา (Admin)")
+@app_commands.describe(channel="ห้องเสียงที่ต้องการให้บอทค้างอยู่")
+@app_commands.default_permissions(administrator=True)
+async def setup_stay_voice(interaction: discord.Interaction, channel: discord.VoiceChannel = None):
+    await interaction.response.defer(ephemeral=True)
+    target_channel = channel
+
+    if target_channel is None and isinstance(interaction.user, discord.Member) and interaction.user.voice:
+        target_channel = interaction.user.voice.channel
+
+    if target_channel is None:
+        await interaction.followup.send("❌ เลือกห้องเสียง หรือเข้าห้องเสียงก่อนแล้วใช้คำสั่งนี้อีกครั้ง", ephemeral=True)
+        return
+
+    update_guild(interaction.guild_id, stay_voice_channel_id=str(target_channel.id))
+
+    voice_client = interaction.guild.voice_client
+    try:
+        if voice_client and voice_client.is_connected():
+            if voice_client.channel.id != target_channel.id:
+                await voice_client.move_to(target_channel)
+        else:
+            await target_channel.connect(self_deaf=True, reconnect=True)
+    except Exception as e:
+        await interaction.followup.send(
+            f"⚠️ บันทึกห้องแล้ว แต่บอทยังเข้าห้องเสียงไม่ได้: {e}\n"
+            "เช็ค Permission: View Channel / Connect",
+            ephemeral=True
+        )
+        return
+
+    await interaction.followup.send(f"✅ ตั้งให้บอทอยู่ห้องเสียง **{target_channel.name}** ตลอดเวลาแล้ว", ephemeral=True)
+
+
+@bot.tree.command(name="stop_stay_voice", description="ปิดระบบให้บอทค้างอยู่ห้องเสียง (Admin)")
+@app_commands.default_permissions(administrator=True)
+async def stop_stay_voice(interaction: discord.Interaction):
+    cfg = load_config()
+    gid = str(interaction.guild_id)
+    if gid in cfg:
+        cfg[gid].pop("stay_voice_channel_id", None)
+        save_config(cfg)
+
+    voice_client = interaction.guild.voice_client
+    if voice_client and voice_client.is_connected():
+        await voice_client.disconnect(force=True)
+
+    await interaction.response.send_message("✅ ปิดระบบค้างห้องเสียงแล้ว", ephemeral=True)
 
 
 # ─── Ticket ───────────────────────────────────────────────────────────────────
