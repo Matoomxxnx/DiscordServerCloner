@@ -340,7 +340,7 @@ class VerifyBot(commands.Bot):
         self.check_giveaways.start()
 
     async def on_ready(self):
-        await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Daslo Store 🚀"))
+        await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Bunmee Store 🚀"))
         print(f"[BOT] ✅ Online: {self.user} | Servers: {len(self.guilds)}")
         print("[BOT] ✅ Loaded SHOP UI v2 (Nitro dropdown + buttons)")
         # copy global commands → guild แล้ว sync ทันที (ไม่ต้องรอ 1 ชั่วโมง)
