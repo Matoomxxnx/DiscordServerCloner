@@ -520,7 +520,7 @@ class VerifyBot(commands.Bot):
                     if voice_client.channel.id != channel.id:
                         await voice_client.move_to(channel)
                     continue
-                await channel.connect(self_deaf=True, reconnect=True)
+                await channel.connect(self_mute=True, self_deaf=False, reconnect=True)
                 print(f"[VOICE] Joined {guild.name} / {channel.name}")
             except discord.ClientException:
                 pass
@@ -631,7 +631,7 @@ async def setup_stay_voice(interaction: discord.Interaction, channel: discord.Vo
             if voice_client.channel.id != target_channel.id:
                 await voice_client.move_to(target_channel)
         else:
-            await target_channel.connect(self_deaf=True, reconnect=True)
+            await target_channel.connect(self_mute=True, self_deaf=False, reconnect=True)
     except Exception as e:
         await interaction.followup.send(
             f"⚠️ บันทึกห้องแล้ว แต่บอทยังเข้าห้องเสียงไม่ได้: {e}\n"
