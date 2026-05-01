@@ -94,14 +94,14 @@ class TicketOpenView(discord.ui.View):
 
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, read_message_history=True),
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, read_message_history=True, attach_files=True, embed_links=True),
         }
         staff_role_id = gcfg.get("ticket_staff_role_id")
         if staff_role_id:
             staff_role = guild.get_role(int(staff_role_id))
             if staff_role:
-                overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+                overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True)
 
         try:
             channel = await guild.create_text_channel(
@@ -119,6 +119,9 @@ class TicketOpenView(discord.ui.View):
             description=f"สวัสดี {interaction.user.mention}!\nทีมงานจะตอบกลับโดยเร็ว\nกรุณาอธิบายปัญหาหรือรายการที่ต้องการ",
             color=0xDC2626
         )
+        ticket_image = gcfg.get("ticket_image_url")
+        if ticket_image:
+            embed.set_image(url=ticket_image)
         embed.set_footer(text=f"{guild.name} • Ticket System")
         await channel.send(content=interaction.user.mention, embed=embed, view=TicketCloseView())
         await interaction.followup.send(f"✅ Ticket ถูกสร้างที่ {channel.mention}", ephemeral=True)
@@ -234,14 +237,14 @@ async def open_order_channel(interaction: discord.Interaction, order_note: str =
 
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
+        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True, embed_links=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, attach_files=True, embed_links=True),
     }
     staff_role_id = gcfg.get("ticket_staff_role_id")
     if staff_role_id:
         staff_role = guild.get_role(int(staff_role_id))
         if staff_role:
-            overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+            overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True, embed_links=True)
 
     try:
         channel = await guild.create_text_channel(
@@ -585,14 +588,18 @@ async def stop_stay_voice(interaction: discord.Interaction):
 
 @bot.tree.command(name="setup_ticket", description="ตั้งค่าระบบ Ticket — รันในช่องที่ต้องการวางปุ่ม (Admin)")
 @app_commands.describe(staff_role="Role ที่จะเห็น Ticket ทั้งหมด", category="Category ที่จะสร้างช่อง Ticket")
+@app_commands.describe(image_url="URL รูป/GIF banner ใน embed Ticket")
 @app_commands.default_permissions(administrator=True)
-async def setup_ticket(interaction: discord.Interaction, staff_role: discord.Role = None, category: discord.CategoryChannel = None):
+async def setup_ticket(interaction: discord.Interaction, staff_role: discord.Role = None, category: discord.CategoryChannel = None, image_url: str = None):
     await interaction.response.defer(ephemeral=True)
+    gcfg = guild_cfg(interaction.guild_id)
     updates = {}
     if staff_role:
         updates["ticket_staff_role_id"] = str(staff_role.id)
     if category:
         updates["ticket_category_id"] = str(category.id)
+    if image_url:
+        updates["ticket_image_url"] = image_url
     update_guild(interaction.guild_id, **updates)
 
     embed = discord.Embed(
@@ -600,6 +607,9 @@ async def setup_ticket(interaction: discord.Interaction, staff_role: discord.Rol
         description="กดปุ่มด้านล่างเพื่อเปิด Ticket\nทีมงานจะตอบกลับโดยเร็วที่สุด",
         color=0xDC2626
     )
+    final_image = image_url or gcfg.get("ticket_image_url")
+    if final_image:
+        embed.set_image(url=final_image)
     embed.set_footer(text=f"{interaction.guild.name} • Ticket System")
     try:
         channel = interaction.channel or await interaction.guild.fetch_channel(interaction.channel_id)
@@ -611,7 +621,8 @@ async def setup_ticket(interaction: discord.Interaction, staff_role: discord.Rol
         f"✅ ตั้งค่า Ticket สำเร็จ!\n"
         f"📌 ช่อง: <#{interaction.channel_id}>\n"
         f"👥 Staff: {staff_role.mention if staff_role else 'ไม่ได้ตั้ง'}\n"
-        f"📁 Category: {category.name if category else 'ไม่ได้ตั้ง'}",
+        f"📁 Category: {category.name if category else 'ไม่ได้ตั้ง'}\n"
+        f"GIF/Banner: {final_image if final_image else 'ไม่ได้ตั้ง'}",
         ephemeral=True
     )
 
