@@ -1,0 +1,28 @@
+modules = ["python-3.11"]
+
+[nix]
+channel = "stable-25_05"
+packages = ["cacert"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "codex"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start bot"
+
+[[workflows.workflow]]
+name = "Start bot"
+author = "codex"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python verify_bot.py"
+
+[workflows.workflow.metadata]
+outputType = "webview"
