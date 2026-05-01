@@ -4,6 +4,7 @@ Features: Verify, Welcome, Ticket, Giveaway, Shop, Credit
 """
 
 import discord
+from aiohttp import web
 from discord import app_commands
 from discord.ext import commands, tasks
 import json, os, sys, asyncio, random, re
@@ -535,6 +536,30 @@ class VerifyBot(commands.Bot):
 bot = VerifyBot()
 
 
+async def health_check(request):
+    return web.Response(text="Bunmee Store bot is online")
+
+
+async def start_health_server():
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    app.router.add_get("/health", health_check)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.getenv("PORT", "8080"))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"[WEB] Health server running on port {port}")
+
+
+async def run_bot_with_health(token: str):
+    await start_health_server()
+    async with bot:
+        await bot.start(token)
+
+
 # ─── Global error handler ─────────────────────────────────────────────────────
 
 @bot.tree.error
@@ -950,7 +975,7 @@ if __name__ == "__main__":
     import time
     while True:
         try:
-            bot.run(token, log_handler=None)
+            asyncio.run(run_bot_with_health(token))
             break
         except discord.LoginFailure:
             print("❌ Token ไม่ถูกต้อง")
