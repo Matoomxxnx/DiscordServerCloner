@@ -6,7 +6,7 @@ Features: Verify, Welcome, Ticket, Giveaway, Shop, Credit
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
-import json, os, sys, asyncio, random
+import json, os, sys, asyncio, random, re
 from datetime import datetime, timedelta, timezone
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "verify_config.json")
@@ -41,6 +41,18 @@ def update_guild(guild_id, **kwargs):
     cfg = load_config()
     cfg.setdefault(str(guild_id), {}).update(kwargs)
     save_config(cfg)
+
+
+REVIEW_COUNTER_PATTERN = re.compile(r"^(?P<prefix>.*?)(?P<count>\d+)$")
+
+
+def parse_review_counter_channel_name(name: str):
+    if "รีวิว" not in name:
+        return None, None
+    match = REVIEW_COUNTER_PATTERN.match(name)
+    if not match:
+        return None, None
+    return match.group("prefix"), int(match.group("count"))
 
 
 # ─── Verify View ──────────────────────────────────────────────────────────────
@@ -335,6 +347,7 @@ class VerifyBot(commands.Bot):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.members = True  # ต้องเปิด Server Members Intent ใน Developer Portal ด้วย
+        intents.messages = True
         intents.voice_states = True
         super().__init__(command_prefix="!", intents=intents)
 
@@ -379,6 +392,68 @@ class VerifyBot(commands.Bot):
             await channel.send(embed=embed)
         except Exception:
             pass
+
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or not message.guild:
+            return
+
+        await self.update_review_counter(message)
+        await self.process_commands(message)
+
+    async def update_review_counter(self, message: discord.Message):
+        channel = message.channel
+        if not isinstance(channel, discord.TextChannel):
+            return
+
+        cfg = load_config()
+        gid = str(message.guild.id)
+        guild_data = cfg.setdefault(gid, {})
+        counters = guild_data.setdefault("review_counters", {})
+        channel_id = str(channel.id)
+        counter = counters.get(channel_id)
+
+        if not counter:
+            prefix, current_count = parse_review_counter_channel_name(channel.name)
+            if prefix is None:
+                return
+            counter = {
+                "base_count": current_count,
+                "prefix": prefix,
+                "users": []
+            }
+            counters[channel_id] = counter
+
+        user_id = str(message.author.id)
+        users = counter.setdefault("users", [])
+        if user_id in users:
+            return
+
+        users.append(user_id)
+        base_count = int(counter.get("base_count", 0))
+        new_count = base_count + len(users)
+        prefix = counter.get("prefix")
+
+        if not prefix:
+            prefix, current_count = parse_review_counter_channel_name(channel.name)
+            if prefix is None:
+                return
+            counter["prefix"] = prefix
+            if not counter.get("base_count"):
+                counter["base_count"] = current_count
+                base_count = current_count
+                new_count = base_count + len(users)
+
+        save_config(cfg)
+
+        new_name = f"{prefix}{new_count}"
+        if channel.name == new_name:
+            return
+        try:
+            await channel.edit(name=new_name, reason="Review counter updated")
+        except discord.Forbidden:
+            print(f"[REVIEW] Missing permission to rename {channel.name}")
+        except Exception as e:
+            print(f"[REVIEW] Failed to rename {channel.name}: {e}")
 
     @tasks.loop(minutes=1)
     async def check_giveaways(self):
@@ -623,6 +698,46 @@ async def setup_ticket(interaction: discord.Interaction, staff_role: discord.Rol
         f"👥 Staff: {staff_role.mention if staff_role else 'ไม่ได้ตั้ง'}\n"
         f"📁 Category: {category.name if category else 'ไม่ได้ตั้ง'}\n"
         f"GIF/Banner: {final_image if final_image else 'ไม่ได้ตั้ง'}",
+        ephemeral=True
+    )
+
+
+@bot.tree.command(name="setup_review_counter", description="ตั้งช่องนี้ให้นับรีวิวจากคนที่มาพิมพ์แบบไม่ซ้ำ (Admin)")
+@app_commands.describe(start_number="เลขเริ่มต้นท้ายชื่อช่อง เช่น 10684 (ไม่ใส่จะอ่านจากชื่อช่องปัจจุบัน)")
+@app_commands.default_permissions(administrator=True)
+async def setup_review_counter(interaction: discord.Interaction, start_number: int = None):
+    channel = interaction.channel or await interaction.guild.fetch_channel(interaction.channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        await interaction.response.send_message("❌ คำสั่งนี้ใช้ได้เฉพาะช่องข้อความ", ephemeral=True)
+        return
+
+    prefix, current_count = parse_review_counter_channel_name(channel.name)
+    if prefix is None:
+        await interaction.response.send_message("❌ ชื่อช่องต้องมีคำว่า รีวิว และลงท้ายด้วยตัวเลข เช่น 📝・รีวิวบริการ・10684", ephemeral=True)
+        return
+
+    base_count = start_number if start_number is not None else current_count
+    cfg = load_config()
+    cfg.setdefault(str(interaction.guild_id), {}).setdefault("review_counters", {})[str(channel.id)] = {
+        "base_count": base_count,
+        "prefix": prefix,
+        "users": []
+    }
+    save_config(cfg)
+
+    new_name = f"{prefix}{base_count}"
+    if channel.name != new_name:
+        try:
+            await channel.edit(name=new_name, reason="Review counter setup")
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ Bot ไม่มีสิทธิ์แก้ชื่อช่อง", ephemeral=True)
+            return
+
+    await interaction.response.send_message(
+        f"✅ ตั้งช่องรีวิวแล้ว\n"
+        f"ช่อง: {channel.mention}\n"
+        f"เลขเริ่มต้น: {base_count}\n"
+        f"จากนี้จะนับเฉพาะคนที่มาพิมพ์ในช่องนี้ และไม่นับคนเดิมซ้ำ",
         ephemeral=True
     )
 
