@@ -1,11 +1,11 @@
 name: Discord Verify Bot
 
 on:
+  workflow_dispatch:
   push:
-    branches: ["main"]     # push โค้ดใหม่แล้วให้ GitHub Actions รีสตาร์ทบอททันที
+    branches: ["main"]
   schedule:
-    - cron: "0 */5 * * *"   # รีสตาร์ทอัตโนมัติทุก 5 ชั่วโมง เพื่อให้บอทออนไลน์ต่อเนื่องบน GitHub Actions
-  workflow_dispatch:          # กดรันมือได้จาก GitHub
+    - cron: "0 */5 * * *"
 
 concurrency:
   group: discord-verify-bot
@@ -29,7 +29,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip "discord.py[voice]==2.7.1" davey==0.1.5
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
       - name: Check required secrets
         run: |
