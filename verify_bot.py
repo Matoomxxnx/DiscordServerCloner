@@ -425,14 +425,10 @@ class VerifyBot(commands.Bot):
             }
             counters[channel_id] = counter
 
-        user_id = str(message.author.id)
-        users = counter.setdefault("users", [])
-        if user_id in users:
-            return
-
-        users.append(user_id)
         base_count = int(counter.get("base_count", 0))
-        new_count = base_count + len(users)
+        message_count = int(counter.get("message_count", 0)) + 1
+        counter["message_count"] = message_count
+        new_count = base_count + message_count
         prefix = counter.get("prefix")
 
         if not prefix:
@@ -443,7 +439,7 @@ class VerifyBot(commands.Bot):
             if not counter.get("base_count"):
                 counter["base_count"] = current_count
                 base_count = current_count
-                new_count = base_count + len(users)
+                new_count = base_count + message_count
 
         save_config(cfg)
 
@@ -747,7 +743,7 @@ async def setup_review_counter(interaction: discord.Interaction, start_number: i
     cfg.setdefault(str(interaction.guild_id), {}).setdefault("review_counters", {})[str(channel.id)] = {
         "base_count": base_count,
         "prefix": prefix,
-        "users": [],
+        "message_count": 0,
     }
     save_config(cfg)
 
@@ -755,7 +751,7 @@ async def setup_review_counter(interaction: discord.Interaction, start_number: i
         f"✅ ตั้งช่องรีวิวแล้ว\n"
         f"ช่อง: {channel.mention}\n"
         f"เลขเริ่มต้น: {base_count}\n"
-        f"จากนี้จะนับเฉพาะคนที่มาพิมพ์ในช่องนี้ และไม่นับคนเดิมซ้ำ",
+        f"จากนี้ใครพิมพ์ในช่องนี้ 1 ข้อความ จะนับเพิ่ม 1 ครั้ง แม้เป็นคนเดิม",
         ephemeral=True
     )
 
