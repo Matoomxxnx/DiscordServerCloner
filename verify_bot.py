@@ -402,6 +402,46 @@ class VerifyBot(commands.Bot):
         await self.update_review_counter(message)
         await self.process_commands(message)
 
+    async def on_voice_state_update(self, member: discord.Member, before, after):
+        if not self.user or member.id != self.user.id or after.channel is not None:
+            return
+        if not member.guild:
+            return
+        gcfg = guild_cfg(member.guild.id)
+        if not gcfg.get("stay_voice_channel_id"):
+            return
+        print(f"[VOICE] Disconnected from {member.guild.name}; reconnecting soon...")
+        await asyncio.sleep(3)
+        await self.ensure_stay_voice_connected(member.guild)
+
+    async def ensure_stay_voice_connected(self, guild: discord.Guild):
+        gcfg = guild_cfg(guild.id)
+        channel_id = gcfg.get("stay_voice_channel_id")
+        if not channel_id:
+            return
+
+        channel = guild.get_channel(int(channel_id))
+        if not isinstance(channel, discord.VoiceChannel):
+            return
+
+        voice_client = guild.voice_client
+        try:
+            if voice_client and voice_client.is_connected():
+                if voice_client.channel.id != channel.id:
+                    await voice_client.move_to(channel)
+                    print(f"[VOICE] Moved to {guild.name} / {channel.name}")
+                return
+
+            if voice_client:
+                await voice_client.disconnect(force=True)
+
+            await channel.connect(self_mute=True, self_deaf=True, reconnect=True, timeout=30)
+            print(f"[VOICE] Joined {guild.name} / {channel.name}")
+        except discord.ClientException as e:
+            print(f"[VOICE] Client issue in {guild.name}: {e}")
+        except Exception as e:
+            print(f"[VOICE] Failed to join {guild.name} / {channel.name}: {e}")
+
     async def update_review_counter(self, message: discord.Message):
         channel = message.channel
         if not isinstance(channel, discord.TextChannel):
@@ -503,27 +543,7 @@ class VerifyBot(commands.Bot):
     @tasks.loop(seconds=30)
     async def keep_voice_connected(self):
         for guild in self.guilds:
-            gcfg = guild_cfg(guild.id)
-            channel_id = gcfg.get("stay_voice_channel_id")
-            if not channel_id:
-                continue
-
-            channel = guild.get_channel(int(channel_id))
-            if not isinstance(channel, discord.VoiceChannel):
-                continue
-
-            voice_client = guild.voice_client
-            try:
-                if voice_client and voice_client.is_connected():
-                    if voice_client.channel.id != channel.id:
-                        await voice_client.move_to(channel)
-                    continue
-                await channel.connect(self_mute=True, self_deaf=False, reconnect=True)
-                print(f"[VOICE] Joined {guild.name} / {channel.name}")
-            except discord.ClientException:
-                pass
-            except Exception as e:
-                print(f"[VOICE] Failed to join {guild.name} / {channel.name}: {e}")
+            await self.ensure_stay_voice_connected(guild)
 
     @keep_voice_connected.before_loop
     async def before_keep_voice_connected(self):
