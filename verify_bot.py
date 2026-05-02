@@ -48,7 +48,8 @@ REVIEW_COUNTER_PATTERN = re.compile(r"^(?P<prefix>.*?)(?P<count>\d+)$")
 
 
 def parse_review_counter_channel_name(name: str):
-    if "รีวิว" not in name:
+    has_review_keyword = "\u0e23\u0e35\u0e27\u0e34\u0e27" in name or "à¸£à¸µà¸§à¸´à¸§" in name
+    if not has_review_keyword:
         return None, None
     match = REVIEW_COUNTER_PATTERN.match(name)
     if not match:
@@ -731,7 +732,7 @@ async def setup_ticket(interaction: discord.Interaction, staff_role: discord.Rol
 @app_commands.describe(start_number="เลขเริ่มต้นท้ายชื่อช่อง เช่น 10684 (ไม่ใส่จะอ่านจากชื่อช่องปัจจุบัน)")
 @app_commands.default_permissions(administrator=True)
 async def setup_review_counter(interaction: discord.Interaction, start_number: int = None):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.send_message("กำลังตั้งค่า review counter...", ephemeral=True)
     channel = interaction.channel or await interaction.guild.fetch_channel(interaction.channel_id)
     if not isinstance(channel, discord.TextChannel):
         await interaction.followup.send("This command can only be used in a text channel.", ephemeral=True)
