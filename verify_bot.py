@@ -732,18 +732,14 @@ async def setup_ticket(interaction: discord.Interaction, staff_role: discord.Rol
 @app_commands.describe(start_number="เลขเริ่มต้นท้ายชื่อช่อง เช่น 10684 (ไม่ใส่จะอ่านจากชื่อช่องปัจจุบัน)")
 @app_commands.default_permissions(administrator=True)
 async def setup_review_counter(interaction: discord.Interaction, start_number: int = None):
-    await interaction.response.send_message("กำลังตั้งค่า review counter...", ephemeral=True)
     channel = interaction.channel or await interaction.guild.fetch_channel(interaction.channel_id)
     if not isinstance(channel, discord.TextChannel):
-        await interaction.followup.send("This command can only be used in a text channel.", ephemeral=True)
+        await interaction.response.send_message("❌ คำสั่งนี้ใช้ได้เฉพาะช่องข้อความ", ephemeral=True)
         return
 
     prefix, current_count = parse_review_counter_channel_name(channel.name)
     if prefix is None:
-        await interaction.followup.send(
-            "Channel name must contain the review keyword and end with a number, for example: review-10684",
-            ephemeral=True,
-        )
+        await interaction.response.send_message("❌ ชื่อช่องต้องมีคำว่า รีวิว และลงท้ายด้วยตัวเลข เช่น 📝・รีวิวบริการ・111", ephemeral=True)
         return
 
     base_count = start_number if start_number is not None else current_count
@@ -754,48 +750,6 @@ async def setup_review_counter(interaction: discord.Interaction, start_number: i
         "users": [],
     }
     save_config(cfg)
-
-    new_name = f"{prefix}{base_count}"
-    if channel.name != new_name:
-        try:
-            await channel.edit(name=new_name, reason="Review counter setup")
-        except discord.Forbidden:
-            await interaction.followup.send("Bot does not have permission to edit this channel name.", ephemeral=True)
-            return
-
-    await interaction.followup.send(
-        f"Review counter is ready.\nChannel: {channel.mention}\nStart number: {base_count}\n"
-        "From now on, each unique user who sends a message in this channel will add 1 review.",
-        ephemeral=True,
-    )
-    return
-
-    channel = interaction.channel or await interaction.guild.fetch_channel(interaction.channel_id)
-    if not isinstance(channel, discord.TextChannel):
-        await interaction.response.send_message("❌ คำสั่งนี้ใช้ได้เฉพาะช่องข้อความ", ephemeral=True)
-        return
-
-    prefix, current_count = parse_review_counter_channel_name(channel.name)
-    if prefix is None:
-        await interaction.response.send_message("❌ ชื่อช่องต้องมีคำว่า รีวิว และลงท้ายด้วยตัวเลข เช่น 📝・รีวิวบริการ・10684", ephemeral=True)
-        return
-
-    base_count = start_number if start_number is not None else current_count
-    cfg = load_config()
-    cfg.setdefault(str(interaction.guild_id), {}).setdefault("review_counters", {})[str(channel.id)] = {
-        "base_count": base_count,
-        "prefix": prefix,
-        "users": []
-    }
-    save_config(cfg)
-
-    new_name = f"{prefix}{base_count}"
-    if channel.name != new_name:
-        try:
-            await channel.edit(name=new_name, reason="Review counter setup")
-        except discord.Forbidden:
-            await interaction.response.send_message("❌ Bot ไม่มีสิทธิ์แก้ชื่อช่อง", ephemeral=True)
-            return
 
     await interaction.response.send_message(
         f"✅ ตั้งช่องรีวิวแล้ว\n"
